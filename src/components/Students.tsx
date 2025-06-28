@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, Filter, UserPlus, Check, X, Award, Target, RefreshCw } from 'lucide-react';
+import { Plus, Edit, Trash2, Filter, UserPlus, Check, X, Award, Target, RefreshCw, ArrowUpDown } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { collection, addDoc, getDocs, query, where, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
@@ -31,6 +31,32 @@ const Students: React.FC = () => {
     password: 'cse@nbkr'
   });
 
+  // Function to sort students by roll number
+  const sortStudentsByRollNo = (studentsArray: Student[]) => {
+    return [...studentsArray].sort((a, b) => {
+      // Extract numeric part from roll numbers for proper sorting
+      const rollA = a.rollNo || '';
+      const rollB = b.rollNo || '';
+      
+      // Extract numbers from roll numbers
+      const numA = rollA.match(/\d+/);
+      const numB = rollB.match(/\d+/);
+      
+      if (numA && numB) {
+        const numberA = parseInt(numA[0]);
+        const numberB = parseInt(numB[0]);
+        
+        // If numbers are different, sort by number
+        if (numberA !== numberB) {
+          return numberA - numberB;
+        }
+      }
+      
+      // If numbers are same or not found, sort alphabetically
+      return rollA.toLowerCase().localeCompare(rollB.toLowerCase());
+    });
+  };
+
   useEffect(() => {
     fetchStudents();
   }, [userProfile]);
@@ -59,7 +85,9 @@ const Students: React.FC = () => {
         ...doc.data()
       })) as Student[];
 
-      setStudents(studentsData);
+      // Sort students by roll number
+      const sortedStudents = sortStudentsByRollNo(studentsData);
+      setStudents(sortedStudents);
 
       // Extract unique sections
       const uniqueSections = Array.from(
@@ -150,11 +178,16 @@ const Students: React.FC = () => {
   };
 
   const filterStudents = () => {
+    let filtered: Student[];
     if (selectedSection === 'all') {
-      setFilteredStudents(students);
+      filtered = students;
     } else {
-      setFilteredStudents(students.filter(student => student.section === selectedSection));
+      filtered = students.filter(student => student.section === selectedSection);
     }
+    
+    // Sort filtered students by roll number
+    const sortedFiltered = sortStudentsByRollNo(filtered);
+    setFilteredStudents(sortedFiltered);
   };
 
   const handleAddStudent = async (e: React.FormEvent) => {
@@ -198,7 +231,7 @@ const Students: React.FC = () => {
 
       setFormData({ name: '', rollNo: '', email: '', section: '', password: 'cse@nbkr' });
       setShowAddModal(false);
-      fetchStudents();
+      fetchStudents(); // This will automatically sort the new list
       alert('Student added successfully! They can now login with their email and password.');
     } catch (error: any) {
       console.error('Error adding student:', error);
@@ -288,7 +321,7 @@ const Students: React.FC = () => {
 
       setEditingStudent(null);
       setFormData({ name: '', rollNo: '', email: '', section: '', password: 'cse@nbkr' });
-      fetchStudents();
+      fetchStudents(); // This will automatically sort the updated list
       alert('Student updated successfully! Changes will be reflected when they next login.');
     } catch (error: any) {
       console.error('Error updating student:', error);
@@ -332,7 +365,7 @@ const Students: React.FC = () => {
       );
       await Promise.all(userDeletePromisesByRoll);
 
-      fetchStudents();
+      fetchStudents(); // This will automatically sort the remaining list
       alert('Student deleted successfully! Their login access has been removed.');
     } catch (error: any) {
       console.error('Error deleting student:', error);
@@ -383,22 +416,30 @@ const Students: React.FC = () => {
 
       {/* Filter Section */}
       <div className="bg-white rounded-lg shadow-sm border p-4">
-        <div className="flex items-center space-x-4">
-          <Filter className="h-5 w-5 text-gray-400" />
-          <span className="text-sm font-medium text-gray-700">Filter by Section:</span>
-          <select
-            value={selectedSection}
-            onChange={(e) => setSelectedSection(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="all">All Sections</option>
-            {sections.map((section) => (
-              <option key={section} value={section}>{section}</option>
-            ))}
-          </select>
-          <span className="text-sm text-gray-600">
-            Showing {filteredStudents.length} of {students.length} students
-          </span>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <Filter className="h-5 w-5 text-gray-400" />
+            <span className="text-sm font-medium text-gray-700">Filter by Section:</span>
+            <select
+              value={selectedSection}
+              onChange={(e) => setSelectedSection(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              <option value="all">All Sections</option>
+              {sections.map((section) => (
+                <option key={section} value={section}>{section}</option>
+              ))}
+            </select>
+            <span className="text-sm text-gray-600">
+              Showing {filteredStudents.length} of {students.length} students
+            </span>
+          </div>
+          
+          {/* Sorting Indicator */}
+          <div className="flex items-center space-x-2 text-sm text-gray-500 bg-gray-50 px-3 py-2 rounded-lg">
+            <ArrowUpDown className="h-4 w-4" />
+            <span>Sorted by Roll Number</span>
+          </div>
         </div>
       </div>
 
@@ -409,7 +450,10 @@ const Students: React.FC = () => {
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Student Details
+                  <div className="flex items-center space-x-2">
+                    <span>Student Details</span>
+                    <ArrowUpDown className="h-3 w-3 text-blue-500" />
+                  </div>
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Section
@@ -443,7 +487,7 @@ const Students: React.FC = () => {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div>
                         <div className="text-sm font-medium text-gray-900">{student.name}</div>
-                        <div className="text-sm text-gray-500">Roll No: {student.rollNo}</div>
+                        <div className="text-sm text-blue-600 font-medium">Roll No: {student.rollNo}</div>
                         <div className="text-sm text-gray-500">{student.email}</div>
                       </div>
                     </td>
@@ -572,8 +616,11 @@ const Students: React.FC = () => {
                   value={formData.rollNo}
                   onChange={(e) => setFormData({ ...formData, rollNo: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Enter roll number"
+                  placeholder="Enter roll number (e.g., 21A91A0501)"
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  Students will be automatically sorted by roll number
+                </p>
               </div>
 
               <div>
