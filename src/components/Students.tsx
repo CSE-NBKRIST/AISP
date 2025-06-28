@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, Filter, UserPlus, Check, X } from 'lucide-react';
+import { Plus, Edit, Trash2, Filter, UserPlus, Check, X, Award, Target, RefreshCw } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { collection, addDoc, getDocs, query, where, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
@@ -15,7 +15,14 @@ const Students: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [loading, setLoading] = useState(false);
-  const [studentStats, setStudentStats] = useState<{[key: string]: {submissions: number, vivaAttempts: number}}>({});
+  const [refreshing, setRefreshing] = useState(false);
+  const [studentStats, setStudentStats] = useState<{[key: string]: {
+    submissions: number;
+    approvedSubmissions: number;
+    vivaAttempts: number;
+    totalVivaScore: number;
+    averageVivaScore: number;
+  }}>({});
   const [formData, setFormData] = useState({
     name: '',
     rollNo: '',
@@ -23,32 +30,6 @@ const Students: React.FC = () => {
     section: '',
     password: 'cse@nbkr'
   });
-
-  // Helper function to sort students by roll number
-  const sortStudentsByRollNo = (studentsArray: Student[]) => {
-    return studentsArray.sort((a, b) => {
-      // Extract numeric part from roll number for proper sorting
-      const rollA = a.rollNo.toLowerCase();
-      const rollB = b.rollNo.toLowerCase();
-      
-      // Try to extract numbers from roll numbers for numeric comparison
-      const numA = rollA.match(/\d+/);
-      const numB = rollB.match(/\d+/);
-      
-      if (numA && numB) {
-        const numberA = parseInt(numA[0]);
-        const numberB = parseInt(numB[0]);
-        
-        // If numbers are different, sort by number
-        if (numberA !== numberB) {
-          return numberA - numberB;
-        }
-      }
-      
-      // If no numbers or numbers are same, sort alphabetically
-      return rollA.localeCompare(rollB);
-    });
-  };
 
   useEffect(() => {
     fetchStudents();
@@ -78,13 +59,11 @@ const Students: React.FC = () => {
         ...doc.data()
       })) as Student[];
 
-      // Sort students by roll number in ascending order
-      const sortedStudents = sortStudentsByRollNo(studentsData);
-      setStudents(sortedStudents);
+      setStudents(studentsData);
 
       // Extract unique sections
       const uniqueSections = Array.from(
-        new Set(sortedStudents.map(student => student.section).filter(Boolean))
+        new Set(studentsData.map(student => student.section).filter(Boolean))
       );
       setSections(uniqueSections);
     } catch (error) {
@@ -92,8 +71,18 @@ const Students: React.FC = () => {
     }
   };
 
+  const handleRefreshStudents = async () => {
+    setRefreshing(true);
+    await fetchStudents();
+    setTimeout(() => setRefreshing(false), 1000);
+  };
+
   const fetchStudentStats = async () => {
     try {
+      // Fetch all users to map student UIDs
+      const usersSnapshot = await getDocs(collection(db, 'users'));
+      const allUsers = usersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
       // Fetch all submissions
       const submissionsSnapshot = await getDocs(collection(db, 'submissions'));
       const allSubmissions = submissionsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -103,15 +92,54 @@ const Students: React.FC = () => {
       const allVivaAttempts = vivaAttemptsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
       // Calculate stats for each student
-      const stats: {[key: string]: {submissions: number, vivaAttempts: number}} = {};
+      const stats: {[key: string]: {
+        submissions: number;
+        approvedSubmissions: number;
+        vivaAttempts: number;
+        totalVivaScore: number;
+        averageVivaScore: number;
+      }} = {};
       
       students.forEach(student => {
-        const studentSubmissions = allSubmissions.filter((sub: any) => sub.studentId === student.id);
-        const studentVivaAttempts = allVivaAttempts.filter((attempt: any) => attempt.studentId === student.id);
-        
+        // Find the user profile for this student
+        const userProfile = allUsers.find(user => 
+          user.email === student.email || 
+          user.rollNo === student.rollNo ||
+          user.uid === student.id
+        );
+
+        const studentUid = userProfile?.uid || student.id;
+
+        // Get submissions for this student
+        const studentSubmissions = allSubmissions.filter((sub: any) => 
+          sub.studentId === studentUid || 
+          sub.studentId === student.id ||
+          sub.studentId === student.uid
+        );
+
+        const approvedSubmissions = studentSubmissions.filter((sub: any) => sub.status === 'approved');
+
+        // Get viva attempts for this student
+        const studentVivaAttempts = allVivaAttempts.filter((attempt: any) => 
+          attempt.studentId === studentUid || 
+          attempt.studentId === student.id ||
+          attempt.studentId === student.uid
+        );
+
+        // Calculate viva scores
+        const totalVivaScore = studentVivaAttempts.reduce((total: number, attempt: any) => 
+          total + (attempt.score || 0), 0
+        );
+        const averageVivaScore = studentVivaAttempts.length > 0 
+          ? Math.round((totalVivaScore / studentVivaAttempts.length) * 100) / 100 
+          : 0;
+
         stats[student.id] = {
           submissions: studentSubmissions.length,
-          vivaAttempts: studentVivaAttempts.length
+          approvedSubmissions: approvedSubmissions.length,
+          vivaAttempts: studentVivaAttempts.length,
+          totalVivaScore,
+          averageVivaScore
         };
       });
 
@@ -122,16 +150,11 @@ const Students: React.FC = () => {
   };
 
   const filterStudents = () => {
-    let filtered;
     if (selectedSection === 'all') {
-      filtered = students;
+      setFilteredStudents(students);
     } else {
-      filtered = students.filter(student => student.section === selectedSection);
+      setFilteredStudents(students.filter(student => student.section === selectedSection));
     }
-    
-    // Ensure filtered students are also sorted by roll number
-    const sortedFiltered = sortStudentsByRollNo([...filtered]);
-    setFilteredStudents(sortedFiltered);
   };
 
   const handleAddStudent = async (e: React.FormEvent) => {
@@ -141,8 +164,9 @@ const Students: React.FC = () => {
     try {
       // Create authentication account for student
       const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      console.log('Created auth account for student:', formData.email);
       
-      // Add student to Firestore
+      // Add student to students collection
       const studentData: Omit<Student, 'id'> = {
         name: formData.name,
         rollNo: formData.rollNo,
@@ -154,10 +178,11 @@ const Students: React.FC = () => {
         vivaScores: {}
       };
 
-      await addDoc(collection(db, 'students'), studentData);
+      const studentDocRef = await addDoc(collection(db, 'students'), studentData);
+      console.log('Added student to students collection:', studentDocRef.id);
       
-      // Create user profile
-      await addDoc(collection(db, 'users'), {
+      // Create user profile in users collection
+      const userProfileData = {
         uid: userCredential.user.uid,
         email: formData.email,
         name: formData.name,
@@ -166,12 +191,15 @@ const Students: React.FC = () => {
         section: formData.section,
         facultyId: userProfile!.uid,
         passwordChanged: false
-      });
+      };
+
+      await addDoc(collection(db, 'users'), userProfileData);
+      console.log('Created user profile for student');
 
       setFormData({ name: '', rollNo: '', email: '', section: '', password: 'cse@nbkr' });
       setShowAddModal(false);
       fetchStudents();
-      alert('Student added successfully!');
+      alert('Student added successfully! They can now login with their email and password.');
     } catch (error: any) {
       console.error('Error adding student:', error);
       alert(`Error adding student: ${error.message}`);
@@ -186,6 +214,7 @@ const Students: React.FC = () => {
 
     setLoading(true);
     try {
+      // Update student in students collection
       await updateDoc(doc(db, 'students', editingStudent.id), {
         name: formData.name,
         rollNo: formData.rollNo,
@@ -193,10 +222,74 @@ const Students: React.FC = () => {
         section: formData.section
       });
 
+      // Find and update corresponding user profile
+      const usersQuery = query(
+        collection(db, 'users'),
+        where('email', '==', editingStudent.email)
+      );
+      const usersSnapshot = await getDocs(usersQuery);
+      
+      // Update user profile with new details
+      const userUpdatePromises = usersSnapshot.docs.map(userDoc => 
+        updateDoc(userDoc.ref, {
+          name: formData.name,
+          rollNo: formData.rollNo,
+          email: formData.email,
+          section: formData.section
+        })
+      );
+      await Promise.all(userUpdatePromises);
+
+      // If email changed, also try to find by rollNo
+      if (formData.email !== editingStudent.email) {
+        const usersQueryByRoll = query(
+          collection(db, 'users'),
+          where('rollNo', '==', editingStudent.rollNo)
+        );
+        const usersSnapshotByRoll = await getDocs(usersQueryByRoll);
+        
+        const userUpdatePromisesByRoll = usersSnapshotByRoll.docs.map(userDoc => 
+          updateDoc(userDoc.ref, {
+            name: formData.name,
+            rollNo: formData.rollNo,
+            email: formData.email,
+            section: formData.section
+          })
+        );
+        await Promise.all(userUpdatePromisesByRoll);
+      }
+
+      // Also find by facultyId and old email combination
+      const usersQueryByFaculty = query(
+        collection(db, 'users'),
+        where('facultyId', '==', userProfile!.uid),
+        where('role', '==', 'student')
+      );
+      const usersSnapshotByFaculty = await getDocs(usersQueryByFaculty);
+      
+      // Update any user profiles that match the old student data
+      const facultyUserUpdatePromises = usersSnapshotByFaculty.docs
+        .filter(userDoc => {
+          const userData = userDoc.data();
+          return userData.email === editingStudent.email || 
+                 userData.rollNo === editingStudent.rollNo;
+        })
+        .map(userDoc => 
+          updateDoc(userDoc.ref, {
+            name: formData.name,
+            rollNo: formData.rollNo,
+            email: formData.email,
+            section: formData.section
+          })
+        );
+      await Promise.all(facultyUserUpdatePromises);
+
+      console.log('Updated student data in both collections');
+
       setEditingStudent(null);
       setFormData({ name: '', rollNo: '', email: '', section: '', password: 'cse@nbkr' });
       fetchStudents();
-      alert('Student updated successfully!');
+      alert('Student updated successfully! Changes will be reflected when they next login.');
     } catch (error: any) {
       console.error('Error updating student:', error);
       alert(`Error updating student: ${error.message}`);
@@ -206,12 +299,41 @@ const Students: React.FC = () => {
   };
 
   const handleDeleteStudent = async (studentId: string) => {
-    if (!confirm('Are you sure you want to delete this student?')) return;
+    if (!confirm('Are you sure you want to delete this student? This will also remove their login access.')) return;
 
     try {
+      const studentToDelete = students.find(s => s.id === studentId);
+      if (!studentToDelete) return;
+
+      // Delete from students collection
       await deleteDoc(doc(db, 'students', studentId));
+
+      // Find and delete corresponding user profile
+      const usersQuery = query(
+        collection(db, 'users'),
+        where('email', '==', studentToDelete.email)
+      );
+      const usersSnapshot = await getDocs(usersQuery);
+      
+      const userDeletePromises = usersSnapshot.docs.map(userDoc => 
+        deleteDoc(userDoc.ref)
+      );
+      await Promise.all(userDeletePromises);
+
+      // Also try to find by rollNo
+      const usersQueryByRoll = query(
+        collection(db, 'users'),
+        where('rollNo', '==', studentToDelete.rollNo)
+      );
+      const usersSnapshotByRoll = await getDocs(usersQueryByRoll);
+      
+      const userDeletePromisesByRoll = usersSnapshotByRoll.docs.map(userDoc => 
+        deleteDoc(userDoc.ref)
+      );
+      await Promise.all(userDeletePromisesByRoll);
+
       fetchStudents();
-      alert('Student deleted successfully!');
+      alert('Student deleted successfully! Their login access has been removed.');
     } catch (error: any) {
       console.error('Error deleting student:', error);
       alert(`Error deleting student: ${error.message}`);
@@ -240,13 +362,23 @@ const Students: React.FC = () => {
       {/* Header */}
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-gray-900">Students Management</h1>
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-blue-700 transition-colors"
-        >
-          <Plus className="h-5 w-5" />
-          <span>Add Student</span>
-        </button>
+        <div className="flex space-x-3">
+          <button
+            onClick={handleRefreshStudents}
+            disabled={refreshing}
+            className="bg-gray-600 text-white px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-gray-700 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw className={`h-5 w-5 ${refreshing ? 'animate-spin' : ''}`} />
+            <span>Refresh</span>
+          </button>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center space-x-2 hover:bg-blue-700 transition-colors"
+          >
+            <Plus className="h-5 w-5" />
+            <span>Add Student</span>
+          </button>
+        </div>
       </div>
 
       {/* Filter Section */}
@@ -265,7 +397,7 @@ const Students: React.FC = () => {
             ))}
           </select>
           <span className="text-sm text-gray-600">
-            Showing {filteredStudents.length} of {students.length} students (sorted by roll number)
+            Showing {filteredStudents.length} of {students.length} students
           </span>
         </div>
       </div>
@@ -283,7 +415,10 @@ const Students: React.FC = () => {
                   Section
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Progress
+                  Submissions
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Viva Performance
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Status
@@ -295,7 +430,13 @@ const Students: React.FC = () => {
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {filteredStudents.map((student) => {
-                const stats = studentStats[student.id] || { submissions: 0, vivaAttempts: 0 };
+                const stats = studentStats[student.id] || { 
+                  submissions: 0, 
+                  approvedSubmissions: 0, 
+                  vivaAttempts: 0, 
+                  totalVivaScore: 0, 
+                  averageVivaScore: 0 
+                };
                 
                 return (
                   <tr key={student.id} className="hover:bg-gray-50">
@@ -314,13 +455,34 @@ const Students: React.FC = () => {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
                         <div className="flex items-center space-x-2 mb-1">
-                          <span className="text-gray-600">Submissions:</span>
+                          <span className="text-gray-600">Total:</span>
                           <span className="font-semibold text-blue-600">{stats.submissions}</span>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <span className="text-gray-600">Viva Attempts:</span>
+                          <span className="text-gray-600">Approved:</span>
+                          <span className="font-semibold text-green-600">{stats.approvedSubmissions}</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm text-gray-900">
+                        <div className="flex items-center space-x-2 mb-1">
+                          <Target className="h-4 w-4 text-purple-500" />
+                          <span className="text-gray-600">Attempts:</span>
                           <span className="font-semibold text-purple-600">{stats.vivaAttempts}</span>
                         </div>
+                        <div className="flex items-center space-x-2">
+                          <Award className="h-4 w-4 text-yellow-500" />
+                          <span className="text-gray-600">Avg Score:</span>
+                          <span className="font-semibold text-yellow-600">
+                            {stats.averageVivaScore > 0 ? `${stats.averageVivaScore}/10` : 'N/A'}
+                          </span>
+                        </div>
+                        {stats.totalVivaScore > 0 && (
+                          <div className="text-xs text-gray-500 mt-1">
+                            Total: {stats.totalVivaScore} marks
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -459,6 +621,15 @@ const Students: React.FC = () => {
                   />
                   <p className="text-xs text-gray-500 mt-1">
                     Student will be required to change this password on first login
+                  </p>
+                </div>
+              )}
+
+              {editingStudent && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <p className="text-sm text-blue-800">
+                    <strong>Note:</strong> Changes will be reflected when the student logs in next time. 
+                    If you change the email, the student will need to use the new email to login.
                   </p>
                 </div>
               )}
